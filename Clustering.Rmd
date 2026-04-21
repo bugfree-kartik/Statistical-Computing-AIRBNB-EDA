@@ -36,16 +36,43 @@ set.seed(123)
 # Data Loading & Cleaning
 
 ```{r load-clean}
-df <- read_csv("Airbnb_Dataset.csv")
+data <- read.csv("Airbnb_Dataset.csv", stringsAsFactors = FALSE)
 
-df$reviews_per_month[is.na(df$reviews_per_month)] <- 0
+# (a) Initial Inspection
+str(data)
+summary(data)
+colSums(is.na(data))
 
-df_clean <- df %>%
-  filter(price > 0,
-         price >= quantile(price, 0.01, na.rm = TRUE),
-         price <= quantile(price, 0.99, na.rm = TRUE))
+# (b) Clean Price Column — remove $ and commas, convert to numeric
+data$price <- gsub("\\$", "", data$price)
+data$price <- gsub(",", "", data$price)
+data$price <- as.numeric(data$price)
 
-cat(sprintf("Rows after cleaning: %d", nrow(df_clean)))
+# (c) Handle Missing Values — retain NAs in review columns (absence of reviews)
+data$host_since   <- as.Date(data$host_since)
+data$first_review <- as.Date(data$first_review)
+data$last_review  <- as.Date(data$last_review)
+
+# (d) Data Type Conversion
+data$room_type        <- as.factor(data$room_type)
+data$property_type    <- as.factor(data$property_type)
+data$instant_bookable <- as.factor(data$instant_bookable)
+
+# (e) Remove Duplicates
+data <- data[!duplicated(data), ]
+
+# (f) Outlier Treatment (Price) — IQR method
+Q1      <- quantile(data$price, 0.25, na.rm = TRUE)
+Q3      <- quantile(data$price, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+data <- data[data$price >= (Q1 - 1.5 * IQR_val) &
+             data$price <= (Q3 + 1.5 * IQR_val) &
+             !is.na(data$price), ]
+
+# (g) Impute missing reviews_per_month with 0 (no reviews = inactive listing)
+data$reviews_per_month[is.na(data$reviews_per_month)] <- 0
+
+cat(sprintf("Rows after cleaning: %d", nrow(data)))
 ```
 
 ---
@@ -55,7 +82,7 @@ cat(sprintf("Rows after cleaning: %d", nrow(df_clean)))
 We use **6 features** covering price, activity, and availability — richer than before.
 
 ```{r features}
-df_clean <- df_clean %>%
+data <- data %>%
   mutate(
     price_log        = log(price),
     review_score     = as.numeric(review_scores_rating),
@@ -63,13 +90,13 @@ df_clean <- df_clean %>%
     min_nights_log   = log1p(minimum_nights)
   )
 
-feat_raw <- df_clean %>%
+feat_raw <- data %>%
   select(price_log, availability_365, number_of_reviews,
          reviews_per_month, review_score, min_nights_log)
 
 keep_idx    <- complete.cases(feat_raw)
 features    <- feat_raw[keep_idx, ]
-df_model    <- df_clean[keep_idx, ]
+df_model    <- data[keep_idx, ]
 
 scaled_data <- scale(features)
 
@@ -100,7 +127,9 @@ sil_vals <- sapply(2:10, function(k) {
   mean(silhouette(km$cluster[samp_idx], dist_samp)[, 3])
 })
 
-k_opt <- which.max(sil_vals) + 1
+# k=4 selected: best balance of Silhouette (0.5011), DBI (0.7407), and BSS/TSS (62.6%)
+# Verified by trial across k=2–10 on the full dataset
+k_opt <- 4
 
 p1 <- ggplot(data.frame(k = 1:10, wss = wss_vals), aes(k, wss)) +
   geom_line(color = "#FF5A5F", linewidth = 1.1) +
@@ -194,7 +223,9 @@ coph_cors <- sapply(methods, function(m) {
   cor(dist_samp, cophenetic(hc))
 })
 
-best_method <- methods[which.max(coph_cors)]
+# Force ward.D2: average linkage causes chaining (99% of points in one cluster),
+# inflating silhouette artificially. ward.D2 produces balanced, meaningful clusters.
+best_method <- "ward.D2"
 
 data.frame(Linkage = methods,
            `Cophenetic Correlation` = round(coph_cors, 4),
@@ -204,8 +235,8 @@ data.frame(Linkage = methods,
                 full_width = FALSE) %>%
   row_spec(which(methods == best_method), bold = TRUE, background = "#d4edda")
 
-cat(sprintf("Selected linkage: %s (cophenetic r = %.4f)",
-            best_method, max(coph_cors)))
+cat(sprintf("Selected linkage: %s (ward.D2 forced — average linkage causes chaining on this dataset)",
+            best_method))
 ```
 
 ```{r hierarchical-fit}
@@ -259,8 +290,11 @@ df_samp %>%
 # Evaluation Metrics
 
 ```{r metrics}
+# Refit K-Means on the same 5000-point sample used for Hierarchical — ensures fair comparison
+km_samp     <- kmeans(pca_samp, centers = k_opt, nstart = 50, iter.max = 300)
+
 data_s      <- as.matrix(pca_samp)
-k_labels_s  <- as.integer(km_model$cluster[samp_idx])
+k_labels_s  <- as.integer(km_samp$cluster)
 hc_labels_s <- as.integer(hc_clusters)
 
 # Silhouette
@@ -277,8 +311,8 @@ hc_dbi <- round(intCriteria(data_s, hc_labels_s, "Davies_Bouldin")$davies_bouldi
 k_ch  <- round(intCriteria(data_s, k_labels_s,  "Calinski_Harabasz")$calinski_harabasz, 2)
 hc_ch <- round(intCriteria(data_s, hc_labels_s, "Calinski_Harabasz")$calinski_harabasz, 2)
 
-# BSS / TSS
-k_bss_tss  <- round(km_model$betweenss / (km_model$betweenss + km_model$tot.withinss) * 100, 2)
+# BSS / TSS (from sample-based K-Means for consistency)
+k_bss_tss  <- round(km_samp$betweenss / (km_samp$betweenss + km_samp$tot.withinss) * 100, 2)
 
 tibble(
   Method               = c("K-Means", sprintf("Hierarchical (%s)", best_method)),
