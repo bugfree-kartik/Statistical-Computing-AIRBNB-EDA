@@ -1,0 +1,1255 @@
+---
+title: "AMS 597 Spring 2026 Group 08 Project"
+author: "AMS 597 Spring 2026 Group 08 Project"
+date: "2026-04-16"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+############################################################
+# Data Cleaning, EDA, and Transformation
+############################################################
+
+library(tidyverse)
+library(plotly)
+
+# Load dataset
+data <- read.csv("Airbnb_Dataset.csv", stringsAsFactors = FALSE)
+
+############################################################
+# 1. DATA CLEANING
+############################################################
+
+# ---- (a) Initial Inspection ----
+str(data)
+summary(data)
+colSums(is.na(data))
+
+# ---- (b) Clean Price Column ----
+# Remove $ and commas, convert to numeric
+data$price <- gsub("\\$", "", data$price)
+data$price <- gsub(",", "", data$price)
+data$price <- as.numeric(data$price)
+
+# ---- Justification ----
+# Price was stored as character with currency symbols and converted to numeric.
+
+# ---- (c) Handling Missing Values ----
+# Keep meaningful NA (e.g., no reviews)
+
+# Creating indicator for listings with no reviews
+data$has_reviews <- ifelse(is.na(data$number_of_reviews), 0, 1)
+
+# Replacing NA reviews with 0 (meaning no reviews)
+data$number_of_reviews[is.na(data$number_of_reviews)] <- 0
+
+# Justification:
+# Instead of removing listings with no reviews, we preserve them
+# and explicitly model their behavior.
+
+# Convert date columns
+data$host_since <- as.Date(data$host_since)
+data$first_review <- as.Date(data$first_review)
+data$last_review <- as.Date(data$last_review)
+
+# ---- Justification ----
+# Missing values in review-related variables represent absence of reviews,
+# hence they are retained instead of imputed.
+
+# ---- (d) Data Type Conversion ----
+data$room_type <- as.factor(data$room_type)
+data$property_type <- as.factor(data$property_type)
+data$instant_bookable <- as.factor(data$instant_bookable)
+
+# ---- Justification ----
+# Proper data types ensure correct statistical analysis.
+
+# ---- (e) Remove Duplicates ----
+data <- data[!duplicated(data), ]
+
+# ---- Justification ----
+# Duplicate records may bias results.
+
+# ---- (f) Outlier Treatment (Price) ----
+Q1 <- quantile(data$price, 0.25, na.rm = TRUE)
+Q3 <- quantile(data$price, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+
+data <- data[data$price >= (Q1 - 1.5 * IQR_val) &
+             data$price <= (Q3 + 1.5 * IQR_val), ]
+
+# ---- Justification ----
+# IQR method removes extreme values while preserving most observations.
+
+# Interpretation:
+# Location plays a significant role in determining listing prices.
+
+############################################################
+# 3. VARIABLE TRANSFORMATION
+############################################################
+
+# Removing invalid rows to avoid division by zero
+data <- data[data$accommodates > 0, ]
+
+# ---- (a) Log Transformation ----
+data$log_price <- log(data$price + 1)
+
+# ---- Justification ----
+# Reduces skewness and stabilizes variance.
+
+# ---- (b) Scaling ----
+data$price_scaled <- scale(data$price)
+
+
+# Price per person
+data$price_per_person <- data$price / data$accommodates
+
+# Host experience (years)
+data$host_experience <- as.numeric(Sys.Date() - data$host_since) / 365
+
+# Bedroom density
+data$bedroom_density <- data$bedrooms / data$accommodates
+
+# ---- Justification ----
+# Ensures variables are on comparable scale for modeling.
+# These features capture pricing efficiency, host maturity,
+# and space utilization, improving model performance.
+
+############################################################
+# 2. EXPLORATORY DATA ANALYSIS (EDA)
+############################################################
+
+# ---- (a) Price Distribution ----
+ggplot(data, aes(x = price)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of Airbnb Prices", x = "Price", y = "Frequency")
+
+# Interpretation:
+# Price distribution is right-skewed with a few high-value listings.
+
+# ---- (b) Price by Room Type ----
+ggplot(data, aes(x = room_type, y = price, fill = room_type)) +
+  geom_boxplot() +
+  labs(title = "Price by Room Type")
+
+# Interpretation:
+# Entire homes have higher prices than private/shared rooms.
+
+# ---- (c) Accommodates vs Price ----
+p <- ggplot(data, aes(x = accommodates, y = price)) +
+  geom_point(alpha = 0.4) +
+  labs(title = "Accommodates vs Price")
+
+ggplotly(p)
+
+# Interpretation:
+# Larger listings tend to have higher prices.
+
+
+# ---- (c2) Accommodates vs Price by Room Type ----
+ggplot(data, aes(x = accommodates, y = price, color = room_type)) +
+  geom_point(alpha = 0.4) +
+  labs(title = "Accommodates vs Price by Room Type")
+
+# Interpretation:
+# Price increases with capacity, especially for entire homes, indicating interaction effects.
+
+
+# ---- (d) Reviews vs Price ----
+ggplot(data, aes(x = number_of_reviews, y = price)) +
+  geom_point(alpha = 0.3, color = "darkgreen") +
+  labs(title = "Reviews vs Price")
+
+# Interpretation:
+# Weak negative relationship between reviews and price.
+
+# ---- (e) Availability vs Price ----
+ggplot(data, aes(x = availability_365, y = price)) +
+  geom_point(alpha = 0.3, color = "purple") +
+  labs(title = "Availability vs Price")
+
+# Interpretation:
+# Higher availability may indicate lower demand or lower pricing.
+
+# ---- (f) Correlation Heatmap ----
+numeric_data <- data[sapply(data, is.numeric)]
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+cor_df <- as.data.frame(as.table(cor_matrix))
+
+ggplot(cor_df, aes(Var1, Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Correlation Heatmap 1")
+
+############################################################
+# Final Correlation Heatmap
+############################################################
+
+library(corrplot)
+
+# Selecting key variables only
+selected_vars <- data %>%
+  select(price, accommodates, bedrooms, bathrooms,
+         number_of_reviews, availability_365)
+
+# Computing correlation matrix
+cor_matrix <- cor(selected_vars, use = "complete.obs")
+
+# Plot clean heatmap
+corrplot(cor_matrix,
+         method = "color",
+         type = "upper",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         col = colorRampPalette(c("blue", "white", "red"))(200))
+
+
+# Interpretation:
+# Strong relationships exist between price, accommodates, and bedrooms.
+
+# ---- (g) Location Analysis ----
+# Automatically detect correct column
+loc_col <- grep("neigh", colnames(data), value = TRUE)[1]
+
+top_locations <- data %>%
+  group_by(.data[[loc_col]]) %>%
+  summarise(avg_price = mean(price, na.rm = TRUE)) %>%
+  arrange(desc(avg_price)) %>%
+  head(10)
+
+ggplot(top_locations, aes(x = reorder(.data[[loc_col]], avg_price), y = avg_price)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  coord_flip() +
+  labs(title = "Top Locations by Average Price", x = "Location", y = "Average Price")
+
+
+summary(data)
+colSums(is.na(data))
+str(data)
+
+############################################################
+# END
+############################################################
+
+```
+
+```{r}
+
+############################################################
+# Variable Transformation, Modeling, PCA, and Conclusion
+############################################################
+
+############################################################
+# 1. VARIABLE TRANSFORMATION
+############################################################
+
+# Scaling key numerical variables
+data$accommodates_scaled <- scale(data$accommodates)
+data$bedrooms_scaled <- scale(data$bedrooms)
+data$bathrooms_scaled <- scale(data$bathrooms)
+
+# Justification:
+# Log transformation reduces skewness in the price distribution.
+# Scaling ensures variables are on comparable ranges for modeling.
+
+
+############################################################
+# Fixing Missing Values Before Modeling
+############################################################
+
+# Remove rows with NA in important variables
+model_data <- data %>%
+  select(log_price, accommodates, bedrooms, bathrooms,
+         number_of_reviews, availability_365,
+         price_per_person, bedroom_density) %>%
+  na.omit()
+
+
+############################################################
+# MODELING: LINEAR REGRESSION + RANDOM FOREST
+############################################################
+
+set.seed(123)
+
+# Train-Test Split
+train_index <- sample(1:nrow(model_data), 0.7 * nrow(model_data))
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+############################################################
+# CROSS-VALIDATION
+############################################################
+
+library(caret)
+
+train_control <- trainControl(method = "cv", number = 5)
+
+# Cross-validated Linear Regression
+cv_lm <- train(log_price ~ accommodates + bedrooms + bathrooms +
+               number_of_reviews + availability_365 +
+               price_per_person + bedroom_density,
+               data = train_data,
+               method = "lm",
+               trControl = train_control)
+
+print(cv_lm)
+
+# Cross-validated Random Forest
+cv_rf <- train(log_price ~ accommodates + bedrooms + bathrooms +
+               number_of_reviews + availability_365 +
+               price_per_person + bedroom_density,
+               data = train_data,
+               method = "rf",
+               trControl = train_control,
+               ntree = 200)
+
+print(cv_rf)
+
+############################################################
+# 1. LINEAR REGRESSION
+############################################################
+
+model_lm <- lm(log_price ~ accommodates + bedrooms + bathrooms +
+               number_of_reviews + availability_365 +
+               price_per_person + bedroom_density,
+               data = train_data)
+
+summary(model_lm)
+
+# ----------------------------------------------------------
+# Residual Diagnostics
+# ----------------------------------------------------------
+
+par(mfrow = c(2,2))
+plot(model_lm)
+
+# Evaluation
+lm_pred <- predict(model_lm, test_data)
+
+lm_rmse <- sqrt(mean((lm_pred - test_data$log_price)^2))
+lm_r2 <- cor(lm_pred, test_data$log_price)^2
+
+lm_rmse
+lm_r2
+
+# Interpretation:
+# Linear regression shows that property size variables (accommodates,
+# bedrooms, bathrooms) are strong predictors of price. Engineered features
+# such as price_per_person further improve explanatory power.
+
+############################################################
+# 2. RANDOM FOREST MODEL
+############################################################
+
+library(randomForest)
+
+rf_model <- randomForest(log_price ~ accommodates + bedrooms + bathrooms +
+                         number_of_reviews + availability_365 +
+                         price_per_person + bedroom_density,
+                         data = train_data,
+                         importance = TRUE,
+                         ntree = 500)
+
+############################################################
+# FEATURE IMPORTANCE
+############################################################
+
+library(ggplot2)
+
+importance_df <- as.data.frame(importance(rf_model))
+importance_df$Feature <- rownames(importance_df)
+
+# Sorting by importance
+importance_df <- importance_df[order(importance_df$IncNodePurity, decreasing = TRUE), ]
+
+ggplot(importance_df,
+       aes(x = reorder(Feature, IncNodePurity),
+           y = IncNodePurity)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance (Random Forest)",
+       x = "Features",
+       y = "Importance (IncNodePurity)") +
+  theme_minimal()
+
+# Evaluation
+rf_pred <- predict(rf_model, test_data)
+
+rf_rmse <- sqrt(mean((rf_pred - test_data$log_price)^2))
+rf_r2 <- cor(rf_pred, test_data$log_price)^2
+
+rf_rmse
+rf_r2
+
+############################################################
+# MODEL COMPARISON
+############################################################
+
+comparison <- data.frame(
+  Model = c("Linear Regression", "Random Forest"),
+  RMSE = c(lm_rmse, rf_rmse),
+  R2 = c(lm_r2, rf_r2)
+)
+
+print(comparison)
+
+# Interpretation:
+# Random Forest outperforms linear regression, indicating the presence
+# of non-linear relationships. Price per person emerges as the most
+# important feature, followed by accommodates and bedroom-related variables.
+
+############################################################
+# 3. FINAL VISUAL SUMMARY
+############################################################
+
+try(dev.off(), silent = TRUE)
+
+summary_data <- model_data[, c("log_price", "accommodates",
+                              "bedrooms", "bathrooms",
+                              "number_of_reviews",
+                              "availability_365")]
+
+pairs(summary_data,
+      main = "Relationships Between Key Variables",
+      col = "steelblue",
+      pch = 19)
+
+# Interpretation:
+# Strong positive relationships exist between price and size-related variables.
+# Weak relationships with reviews and availability indicate that pricing is
+# primarily driven by property characteristics rather than demand factors.
+
+############################################################
+# FINAL CONCLUSION
+############################################################
+
+# The analysis shows that Airbnb pricing is largely driven by property size,
+# room characteristics, and pricing efficiency. Random Forest captures
+# non-linear effects better than linear regression, leading to improved
+# predictive performance. Clustering and PCA further reveal underlying
+# structure in the dataset, supporting segmentation of listings into
+# distinct pricing categories.
+
+############################################################
+# END
+############################################################
+```
+
+
+
+
+```{r}
+############################################################
+# CLUSTERING ANALYSIS
+############################################################
+
+# Selecting relevant variables
+cluster_data <- data %>%
+  select(price, availability_365, number_of_reviews, accommodates)
+
+# Removing NA
+cluster_data <- na.omit(cluster_data)
+
+# Scaling data
+cluster_scaled <- scale(cluster_data)
+
+############################################################
+# Determine Optimal Clusters (Elbow Method)
+############################################################
+
+wss <- numeric(10)
+
+for (i in 1:10) {
+  kmeans_model <- kmeans(cluster_scaled, centers = i, nstart = 25)
+  wss[i] <- kmeans_model$tot.withinss
+}
+
+plot(1:10, wss, type = "b",
+     xlab = "Number of Clusters",
+     ylab = "Within Sum of Squares",
+     main = "Elbow Method")
+
+############################################################
+# K-Means Clustering
+############################################################
+
+set.seed(123)
+kmeans_result <- kmeans(cluster_scaled, centers = 3, nstart = 50)
+
+# Adding cluster labels
+cluster_data$cluster <- as.factor(kmeans_result$cluster)
+
+############################################################
+# Visualization
+############################################################
+
+library(ggplot2)
+
+ggplot(cluster_data, aes(x = price, y = availability_365, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Clusters of Airbnb Listings",
+       x = "Price",
+       y = "Availability")
+
+############################################################
+# Cluster Summary
+############################################################
+
+aggregate(cluster_data[,1:4],
+          by = list(cluster_data$cluster),
+          FUN = mean)
+
+cluster_summary <- cluster_data %>%
+  group_by(cluster) %>%
+  summarise_all(mean)
+
+print(cluster_summary)
+
+
+# Interpretation:
+# Cluster 1: Low price, high availability → budget listings
+# Cluster 2: Moderate price → mid-range listings
+# Cluster 3: High price, low availability → premium listings
+```
+
+
+
+```{r}
+############################################################
+# CLUSTER EVALUATION
+############################################################
+
+library(cluster)
+library(ggplot2)
+
+############################################################
+# 1. SILHOUETTE ANALYSIS
+############################################################
+
+sil <- silhouette(kmeans_result$cluster, dist(cluster_scaled))
+
+# Average silhouette width
+avg_sil_width <- mean(sil[, 3])
+print(avg_sil_width)
+
+# Cleaner Silhouette Plot
+plot(sil, col = c("steelblue", "orange", "green"),
+     main = paste("Silhouette Plot (Avg =", round(avg_sil_width, 2), ")"))
+
+# Interpretation:
+# Average silhouette ~0.32 indicates moderate cluster separation.
+# Some overlap exists, suggesting clusters are not perfectly distinct.
+
+############################################################
+# 2. ELBOW METHOD
+############################################################
+
+wss <- numeric(10)
+
+for (i in 1:10) {
+  km <- kmeans(cluster_scaled, centers = i, nstart = 50)
+  wss[i] <- km$tot.withinss
+}
+
+elbow_df <- data.frame(k = 1:10, wss = wss)
+
+ggplot(elbow_df, aes(x = k, y = wss)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Elbow Method",
+       x = "Number of Clusters (K)",
+       y = "Within Sum of Squares") +
+  theme_minimal()
+
+############################################################
+# 3. SILHOUETTE METHOD
+############################################################
+
+sil_width <- numeric(10)
+
+for (k in 2:10) {
+  km <- kmeans(cluster_scaled, centers = k, nstart = 50)
+  ss <- silhouette(km$cluster, dist(cluster_scaled))
+  sil_width[k] <- mean(ss[, 3])
+}
+
+sil_df <- data.frame(k = 2:10, sil_width = sil_width[2:10])
+
+ggplot(sil_df, aes(x = k, y = sil_width)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Silhouette Method",
+       x = "Number of Clusters (K)",
+       y = "Average Silhouette Width") +
+  theme_minimal()
+
+# Interpretation:
+# Both elbow and silhouette methods suggest k = 3 as a reasonable choice.
+# However, moderate silhouette values indicate only partial separation,
+# which aligns with the limitation that other cluster structures may exist.
+
+############################################################
+# 4. PCA VISUALIZATION
+############################################################
+
+pca <- prcomp(cluster_scaled)
+
+summary(pca)
+
+pca_df <- as.data.frame(pca$x)
+pca_df$cluster <- as.factor(kmeans_result$cluster)
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Cluster Visualization using PCA",
+       x = "Principal Component 1",
+       y = "Principal Component 2") +
+  theme_minimal()
+
+# PCA Interpretation:
+# PCA shows partial separation between clusters.
+# Since PCA is linear, complex non-linear structures may not be captured,
+# supporting the limitation regarding dimensionality reduction.
+
+############################################################
+# 5. VARIANCE RATIO
+############################################################
+
+variance_ratio <- kmeans_result$betweenss / kmeans_result$totss
+print(variance_ratio)
+
+# Interpretation:
+# Higher ratio indicates better clustering structure.
+# Moderate value suggests reasonable but not perfect cluster separation.
+
+############################################################
+# FINAL CLUSTERING INSIGHT
+############################################################
+
+# Cluster profiling
+cluster_summary <- cluster_data %>%
+  group_by(cluster) %>%
+  summarise_all(mean)
+
+print(cluster_summary)
+
+# Interpretation:
+# Clusters represent different pricing segments:
+# - Low price, high availability → budget listings
+# - Moderate values → mid-range listings
+# - High price, low availability → premium listings
+```
+
+
+# Research Questions
+
+> **What underlying components explain variation in Airbnb listing features?**
+
+Airbnb listings are described by many correlated numeric features (size, availability,
+review volume, review sub-scores, host activity, etc.). Principal Component Analysis (PCA)
+reduces this space to a small set of orthogonal components that capture the dominant
+patterns of variation. This lets us name the *latent dimensions* that structure the NYC
+market — e.g. "how big is the listing," "how well-reviewed is it," "how active is the host."
+
+## Why PCA for this question
+
+The Airbnb dataset suffers from **multicollinearity**: many columns measure related
+aspects of the same underlying thing. For example, the six `review_scores_*` sub-scores
+are all high when guests are happy and all low when they are not — they do not contain
+six independent pieces of information. Similarly, `number_of_reviews`, `reviews_per_month`,
+and `estimated_occupancy_l365d` all rise together when a listing is actively booked.
+
+Feeding 16 correlated raw variables into a downstream model (regression, clustering,
+outlier detection) is wasteful and can be actively harmful — coefficients become unstable
+and variance is double-counted. PCA addresses this by:
+
+1. **Removing redundancy** — it rotates the feature space so that the new axes are
+   uncorrelated with each other.
+2. **Compressing information** — the first few axes keep most of the variation; the rest
+   is noise or near-duplicate information and can be dropped.
+3. **Producing interpretable constructs** — each retained axis is a weighted combination
+   of the original variables that we can *name* ("review quality," "listing size") and
+   reason about as a latent property of a listing.
+
+The alternative — manual feature engineering — requires us to guess which groups of
+variables go together. PCA discovers those groupings from the data itself, which is
+especially valuable when we are exploring the structure of a market rather than testing
+a pre-specified hypothesis.
+
+## Why these 16 variables (and not others)
+
+The raw CSV has ~80 columns, but most are unsuitable for PCA. Our selection criteria:
+
+- **Must be numeric and continuous (or count-like).** PCA is defined on a covariance /
+  correlation matrix, so categorical strings (`room_type`, `neighbourhood`, `amenities`)
+  cannot be fed in directly. They need one-hot encoding, which creates sparse binary
+  columns that distort Euclidean distances — a different analysis problem.
+
+- **Must measure a property of the listing, not an identifier or URL.** Fields like `id`,
+  `listing_url`, `host_id`, `scrape_id`, `latitude`, `longitude` either have no
+  meaningful variance (unique IDs) or belong to a different analysis (geography).
+
+- **Must not be a near-perfect duplicate of another selected column.** This is why we
+  pick `availability_365` but drop `availability_30 / 60 / 90` (highly correlated shorter
+  windows of the same signal); `bedrooms` but not `beds` (redundant size proxy);
+  `minimum_nights` but not the five `minimum_/maximum_*_nights` variants (same information,
+  different aggregation); `hosts_time_as_host_years` but not `hosts_time_as_host_months`
+  (same variable in different units).
+
+- **Price is deliberately excluded.** Price is the *outcome* most downstream analyses
+  (in this project and in the Airbnb literature) try to *predict*. Including it in the
+  PCA would let price leak into the components, so we would end up "explaining" price
+  with itself. Leaving price out means the components describe listing *characteristics*,
+  and we can then use them as honest predictors of price in a follow-up regression.
+
+Grouping the 16 retained variables by conceptual bucket:
+
+| Bucket | Variables | What it captures |
+|---|---|---|
+| **Listing size** | `accommodates`, `bedrooms` | Physical capacity |
+| **Booking rules / availability** | `minimum_nights`, `availability_365` | How the listing is offered |
+| **Review volume** | `number_of_reviews`, `reviews_per_month`, `estimated_occupancy_l365d` | How often it is actually booked |
+| **Review quality** | `review_scores_rating`, `...accuracy`, `...cleanliness`, `...checkin`, `...communication`, `...location`, `...value` | How guests rate the stay |
+| **Host profile** | `calculated_host_listings_count`, `hosts_time_as_host_years` | Operator scale and tenure |
+
+A key test of the PCA will be whether these *a priori* buckets show up as separate
+components — if they do, the method has recovered sensible latent structure; if not, the
+real structure of the market is more entangled than we assumed.
+
+# Packages
+
+```{r packages}
+required_pkgs <- c("readr", "dplyr", "tidyr", "ggplot2",
+                   "factoextra", "knitr", "tibble", "Rtsne")
+missing_pkgs <- setdiff(required_pkgs, rownames(installed.packages()))
+if (length(missing_pkgs)) {
+  install.packages(missing_pkgs, repos = "https://cloud.r-project.org")
+}
+
+library(readr)       # fast CSV reader (handles .gz transparently)
+library(dplyr)       # data manipulation
+library(tidyr)       # drop_na
+library(ggplot2)     # plots
+library(factoextra)  # PCA visualisations
+library(knitr)       # nicer tables
+library(tibble)      # rownames_to_column
+library(Rtsne)       # t-SNE for nonlinear dimensionality reduction
+```
+
+# Data Preparation
+
+PCA is sensitive to the exact numeric matrix it receives — missing values, heavy-tailed
+outliers, and wildly different scales all distort the eigen-decomposition. The next three
+steps (NA handling, outlier capping, skew correction) exist to protect PCA from those
+failure modes.
+
+## Load and select variables
+
+We read the full CSV and immediately narrow to only the 16 PCA variables. Keeping the
+selection list explicit (rather than "drop the obvious garbage and take the rest") makes
+it auditable by the rest of the group: everyone can see exactly what went into PCA.
+
+```{r load-data}
+# read_csv auto-detects gzip; works for both "listings.csv" and "listings.csv.gz"
+raw_path <- if (file.exists("listings.csv.gz")) "listings.csv.gz" else "listings.csv"
+
+#raw <- read_csv(raw_path, show_col_types = FALSE, progress = FALSE)
+raw<- read.csv("Airbnb_Dataset.csv", stringsAsFactors = FALSE)
+pca_vars <- c(
+  "accommodates", "bedrooms", "minimum_nights", "availability_365",
+  "number_of_reviews", "reviews_per_month",
+  "review_scores_rating", "review_scores_accuracy", "review_scores_cleanliness",
+  "review_scores_checkin", "review_scores_communication",
+  "review_scores_location", "review_scores_value",
+  "estimated_occupancy_l365d", "calculated_host_listings_count",
+  "hosts_time_as_host_years"
+)
+
+dat <- raw %>% select(all_of(pca_vars))
+
+cat("Rows (raw):   ", nrow(raw), "\n")
+cat("Columns used: ", ncol(dat), "\n")
+```
+
+## Clean: drop NAs, cap outliers, log-transform skewed counts
+
+Three preprocessing decisions, each targeting a specific PCA failure mode:
+
+1. **`drop_na()` — complete-case analysis.** `prcomp()` cannot accept `NA`s; the
+   covariance matrix is undefined when any cell is missing. Most missingness in this
+   data is structural: listings with *zero* reviews have `NA` for every `review_scores_*`
+   column (there are no reviews to score). Imputing these would invent opinions that
+   don't exist, so we restrict PCA to the sub-population of listings that actually *have*
+   reviews. This is the right sub-population for our research question — a listing with
+   no reviews has no review-related variation to decompose.
+
+2. **Cap `minimum_nights` at 30.** Inside Airbnb hosts who want to pause their listing
+   often set `minimum_nights = 999` (or 1250) — it is effectively a "closed" flag, not a
+   real booking rule. One such outlier has a z-score of ~50 after scaling, which would
+   let a handful of rows single-handedly define an entire principal component. Capping
+   at 30 preserves the real variation (1-night stays vs. month-long corporate rentals)
+   while neutralising the sentinel values.
+
+3. **`log1p()` on `number_of_reviews` and `reviews_per_month`.** Both are extremely
+   right-skewed: most listings have few reviews, a handful have thousands. On the raw
+   scale, the top 1% of listings dominate the variance and PCA will build its first
+   axis around them rather than around the typical listing. `log1p(x) = log(1 + x)`
+   compresses the tail while handling zeros cleanly, producing a distribution whose
+   variance is more uniformly spread across listings.
+
+```{r clean}
+# Cap minimum_nights at 30 — values like 999 are listing "blocked" flags, not real stays.
+# Log1p review counts — both are strongly right-skewed (a few listings with thousands).
+dat_clean <- dat %>%
+  drop_na() %>%
+  mutate(
+    minimum_nights    = pmin(minimum_nights, 30),
+    number_of_reviews = log1p(number_of_reviews),
+    reviews_per_month = log1p(reviews_per_month)
+  )
+
+cat("Rows after drop_na: ", nrow(dat_clean), "\n")
+cat("Rows dropped:       ", nrow(dat) - nrow(dat_clean), "\n")
+```
+
+```{r summary-table}
+# Quick sanity-check of the analysis matrix.
+summary(dat_clean) |> knitr::kable(caption = "Summary of PCA input variables (after cleaning).")
+```
+
+# Principal Component Analysis
+
+## Why `scale. = TRUE`
+
+Our variables live on radically different scales: `accommodates` is on a 1–16 scale,
+`availability_365` is 0–365, `number_of_reviews` (even after `log1p`) runs up to ~7, and
+review sub-scores are constrained to ~4.0–5.0. Without standardisation, PCA would
+allocate most of PC1 to whichever variable has the largest raw variance — `availability_365`
+— purely because its *units* are bigger, not because it is more important.
+
+Setting `scale. = TRUE` makes `prcomp()` run on the correlation matrix rather than the
+covariance matrix: every variable is centered and divided by its standard deviation so
+that each one contributes equally *a priori*. The components then reflect genuine
+co-variation between variables, not accidents of units.
+
+```{r pca}
+pca_fit <- prcomp(dat_clean, scale. = TRUE)
+
+# Full variance table
+var_tbl <- data.frame(
+  PC          = paste0("PC", seq_along(pca_fit$sdev)),
+  Eigenvalue  = pca_fit$sdev^2,
+  PctVar      = (pca_fit$sdev^2) / sum(pca_fit$sdev^2) * 100,
+  CumPctVar   = cumsum((pca_fit$sdev^2) / sum(pca_fit$sdev^2)) * 100
+)
+
+knitr::kable(var_tbl, digits = 2,
+             caption = "Eigenvalues, % variance, and cumulative % variance.")
+```
+
+## Component retention (Kaiser rule + 75% cumulative variance)
+
+How many of the 16 components should we keep? We combine two standard criteria:
+
+- **Kaiser rule (eigenvalue > 1).** Because we standardised the variables, each original
+  variable contributes exactly 1 unit of variance. A component with an eigenvalue *less*
+  than 1 therefore summarises less information than a single original variable — there
+  is no compression benefit to keeping it.
+- **Cumulative variance ≥ 75%.** We want the retained components to collectively
+  represent the bulk of the variation in the data. 75% is a conventional floor
+  (some texts use 70%, some 80%); below it, we are throwing away too much signal.
+
+Taking the stricter of the two criteria (`max`) guards against pathological cases where
+one criterion agrees with very few components and the other with many.
+
+
+```{r retention}
+kaiser_k  <- sum(var_tbl$Eigenvalue > 1)
+cum75_k   <- which(var_tbl$CumPctVar >= 75)[1]
+k_retain  <- max(kaiser_k, cum75_k, na.rm = TRUE)
+
+cat("Kaiser rule (eigenvalue > 1) suggests:", kaiser_k, "components\n")
+cat("Cumulative >= 75% reached at:         ", cum75_k, "components\n")
+cat("=> Retaining k =", k_retain, "components\n")
+```
+
+We keep **`r k_retain` components**, taking the stricter of the two criteria so that the
+retained components both (a) individually carry more information than a single original
+variable (Kaiser) and (b) jointly explain at least 75% of total variance.
+
+## Parallel Analysis (Horn's Method)
+
+The Kaiser rule and cumulative variance threshold are useful starting points, but both
+have known weaknesses. The Kaiser cutoff of 1.0 is somewhat arbitrary, and it tends to
+over-retain components in datasets with many variables. Parallel analysis provides a
+more principled alternative: it generates many random datasets with the same dimensions
+as our real data, runs PCA on each one, and records the eigenvalues you would get from
+pure noise. Any real component whose eigenvalue exceeds what random noise would produce
+is worth keeping; the rest are indistinguishable from chance.
+
+```{r parallel-analysis, fig.cap="Parallel analysis: observed eigenvalues vs. the 95th percentile of random eigenvalues."}
+set.seed(42)
+n_iter   <- 100
+n_obs    <- nrow(dat_clean)
+n_vars   <- ncol(dat_clean)
+
+# Generate random eigenvalues from n_iter permutations of the data
+random_eigs <- matrix(NA, nrow = n_iter, ncol = n_vars)
+for (i in seq_len(n_iter)) {
+  # Shuffle each column independently to break all real correlations
+  shuffled <- apply(dat_clean, 2, sample)
+  random_eigs[i, ] <- prcomp(shuffled, scale. = TRUE)$sdev^2
+}
+
+# 95th percentile of random eigenvalues for each component
+eig_95 <- apply(random_eigs, 2, quantile, probs = 0.95)
+
+# How many real eigenvalues exceed the random threshold?
+pa_k <- sum(var_tbl$Eigenvalue > eig_95)
+
+pa_df <- data.frame(
+  PC        = seq_len(n_vars),
+  Observed  = var_tbl$Eigenvalue,
+  Random95  = eig_95
+)
+
+ggplot(pa_df, aes(x = PC)) +
+  geom_line(aes(y = Observed, colour = "Observed"), linewidth = 0.8) +
+  geom_point(aes(y = Observed, colour = "Observed"), size = 2) +
+  geom_line(aes(y = Random95, colour = "Random (95th pctile)"),
+            linewidth = 0.8, linetype = "dashed") +
+  geom_point(aes(y = Random95, colour = "Random (95th pctile)"), size = 2) +
+  geom_hline(yintercept = 1, linetype = "dotted", colour = "grey50") +
+  scale_x_continuous(breaks = seq_len(n_vars)) +
+  scale_colour_manual(values = c("Observed" = "steelblue",
+                                 "Random (95th pctile)" = "firebrick")) +
+  labs(x = "Component", y = "Eigenvalue",
+       title = "Parallel Analysis",
+       subtitle = paste0("Retain ", pa_k,
+                         " components (observed > random 95th percentile)"),
+       colour = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+cat("Parallel analysis suggests retaining:", pa_k, "components\n")
+cat("Kaiser rule suggested:               ", kaiser_k, "components\n")
+cat("75% cumulative variance reached at:  ", cum75_k, "components\n")
+```
+
+**Interpretation.** Parallel analysis suggests retaining `r pa_k` components, which is
+the number of observed eigenvalues that exceed what random, uncorrelated data would
+produce. This gives us a data-driven, statistically grounded answer to "how many
+components are real?" rather than relying on a fixed cutoff. When parallel analysis
+and the Kaiser rule disagree, parallel analysis is generally considered more trustworthy
+because it accounts for the specific sample size and number of variables in the dataset.
+
+# Visualisations
+
+Each of the plots below answers a different question, and together they give a
+complete picture of the PCA:
+
+1. **Scree plot** — *how many* components are worth keeping?
+2. **PC1 loadings** — *what does* PC1 mean?
+3. **PC2 loadings** — *what does* PC2 mean?
+3b. **PC3 loadings** — *what does* PC3 mean?
+4. **Variable biplot** — how are *variables* related to each other in PC1-PC2 space?
+5. **Listing scatter** — how are *listings* distributed in PC1-PC2 space?
+6. **t-SNE** — does nonlinear projection confirm PCA's findings?
+
+## 1. Scree plot
+
+The scree plot is a diagnostic for choosing $k$. We look for (a) components above the
+Kaiser line and (b) an "elbow" where the incremental variance drops sharply — beyond
+the elbow, extra components mostly capture noise. Labeling each bar with its exact
+percentage makes the plot self-contained for the written report.
+
+
+```{r scree-plot, fig.cap="Percentage of variance explained by each principal component."}
+ggplot(var_tbl, aes(x = factor(PC, levels = PC), y = PctVar)) +
+  geom_col(fill = "steelblue", alpha = 0.85) +
+  geom_text(aes(label = sprintf("%.1f%%", PctVar)),
+            vjust = -0.4, size = 3) +
+  geom_line(aes(group = 1), colour = "grey40") +
+  geom_point(colour = "grey20") +
+  labs(x = "Principal component",
+       y = "% variance explained",
+       title = "Scree plot",
+       subtitle = paste0("Retaining ", k_retain,
+                         " components (Kaiser + >= 75% cumulative variance)")) +
+  theme_minimal(base_size = 11) +
+  theme(plot.title.position = "plot")
+```
+
+**Interpretation.** The scree plot shows a clear drop after the first few components —
+PC1 alone captures the largest share of variance, with PC2 and PC3 adding progressively
+less. The "elbow" and the Kaiser cutoff agree, giving us confidence that a small number
+of components is a faithful summary of the 16-variable feature space.
+
+## 2. PC1 loadings
+
+Loadings are the weights the PCA gives each original variable when forming a component.
+Reading a loading bar chart is the core interpretive step: variables with large positive
+or large negative bars *define* the component, while variables near zero are irrelevant
+to it. We sort by signed loading and colour by sign so that the positive and negative
+"ends" of the axis are immediately visible.
+
+```{r pc1-loadings, fig.cap="Variable loadings on PC1 (sorted by magnitude)."}
+loadings_df <- as.data.frame(pca_fit$rotation) %>%
+  rownames_to_column("variable")
+
+plot_loadings <- function(df, pc, title) {
+  df %>%
+    mutate(value = .data[[pc]]) %>%
+    arrange(value) %>%
+    mutate(variable = factor(variable, levels = variable)) %>%
+    ggplot(aes(x = variable, y = value,
+               fill = value > 0)) +
+    geom_col(show.legend = FALSE, alpha = 0.9) +
+    coord_flip() +
+    scale_fill_manual(values = c("TRUE" = "#2C7FB8", "FALSE" = "#D95F0E")) +
+    labs(x = NULL, y = paste("Loading on", pc), title = title) +
+    theme_minimal(base_size = 11)
+}
+
+plot_loadings(loadings_df, "PC1", "PC1 loadings: which variables drive PC1?")
+```
+
+**Interpretation — PC1: "Review Activity / Engagement".**
+PC1 is dominated by review-related variables that move together: `number_of_reviews`,
+`reviews_per_month`, and `estimated_occupancy_l365d` all load with large magnitude and
+the same sign, while the review *sub-scores* also contribute. A listing with a high PC1
+score is one that is actively booked and accumulating reviews — essentially a measure of
+**market engagement**. Listings that sit low on PC1 are quiet / under-booked properties.
+
+## 3. PC2 loadings
+
+PC2 is orthogonal to PC1 by construction: it captures the largest remaining pattern
+*after* PC1 has been projected out. In other words, we are looking for the next axis of
+variation that moves *independently* of whatever PC1 represented.
+
+```{r pc2-loadings, fig.cap="Variable loadings on PC2 (sorted by magnitude)."}
+plot_loadings(loadings_df, "PC2", "PC2 loadings: which variables drive PC2?")
+```
+
+**Interpretation — PC2: "Review Quality (Guest Satisfaction)".**
+PC2 is driven by the review *sub-scores* — `review_scores_rating`, `...accuracy`,
+`...cleanliness`, `...checkin`, `...communication`, `...value` — which load together and
+separately from review *volume*. This axis therefore captures how well guests rate a
+listing, independently of how many reviews it has. A high PC2 score means consistently
+positive guest feedback; a low PC2 score means poorer-rated stays.
+
+## 3b. PC3 loadings
+
+Since we retain more than two components, it is important to inspect the loadings
+beyond the first two. PC3 captures the next largest independent pattern after PC1
+and PC2 have been accounted for.
+
+```{r pc3-loadings, fig.cap="Variable loadings on PC3 (sorted by magnitude)."}
+plot_loadings(loadings_df, "PC3", "PC3 loadings: which variables drive PC3?")
+```
+
+**Interpretation — PC3: "Listing Size / Capacity".**
+PC3 is dominated by `accommodates` and `bedrooms`, the two variables that describe
+the physical size of the listing. This component is essentially a "how big is it?" axis.
+It loads independently of review activity and review quality, confirming that listing
+capacity is a separate dimension of variation in the data. A studio apartment for two
+guests sits at one end of this axis; a large multi-bedroom property at the other.
+
+## 4. Variable biplot coloured by contribution
+
+The variable map plots each original variable as an arrow in the PC1-PC2 plane. Three
+geometric facts matter:
+
+- **Direction** — arrows pointing the same way measure the same underlying thing (they
+  are highly correlated); arrows at 90° are uncorrelated; arrows pointing in opposite
+  directions are anti-correlated.
+- **Length** — longer arrows are better represented in the PC1-PC2 plane. Short arrows
+  live mostly in higher components (PC3+) and the 2-D projection is misleading for them.
+- **Colour (contribution)** — red arrows are the variables doing the most work in
+  defining PC1 and PC2 jointly; blue arrows are passengers on this plane.
+
+This is the single most information-dense PCA diagnostic — it compresses the full
+loadings table into one picture.
+
+```{r var-biplot, fig.cap="Variable contributions on the PC1-PC2 plane."}
+fviz_pca_var(
+  pca_fit,
+  col.var      = "contrib",
+  gradient.cols = c("#2C7FB8", "#FDB863", "#D7191C"),
+  repel        = TRUE
+) +
+  labs(title = "PCA variable map (PC1 vs PC2)",
+       subtitle = "Arrow colour = total contribution to PC1 + PC2") +
+  theme_minimal(base_size = 11)
+```
+
+**Interpretation.** The variable map confirms the story from the loading plots. Review
+sub-scores cluster tightly together (pointing in a common direction — they measure the
+same underlying "quality" construct), while review *volume* variables
+(`number_of_reviews`, `reviews_per_month`, `estimated_occupancy_l365d`) form a distinct
+cluster on a different axis, capturing *engagement*. Size variables (`accommodates`,
+`bedrooms`) point in yet another direction — evidence that **listing size** emerges as a
+third, largely independent dimension. Variables whose arrows are short and far from the
+unit circle are poorly represented by PC1-PC2 and instead contribute to PC3+.
+
+## 5. Listings in PC1 vs PC2 space
+
+While the previous plots describe *variables*, this one describes *listings*. Each
+point is one listing scored on PC1 and PC2 — a 2-D summary of a 16-D feature vector.
+Density contours are used because with ~40k points raw dots overplot into a solid
+blob; contours reveal where the bulk of the market actually sits and where the
+interesting tail populations live.
+
+```{r ind-scatter, fig.cap="Listings scored on PC1 and PC2. Density contours emphasise where most listings sit."}
+scores_df <- as.data.frame(pca_fit$x[, 1:2])
+
+ggplot(scores_df, aes(PC1, PC2)) +
+  geom_point(alpha = 0.15, size = 0.6, colour = "steelblue") +
+  geom_density_2d(colour = "grey20", linewidth = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey60") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey60") +
+  labs(title = "NYC Airbnb listings projected onto PC1 x PC2",
+       x = sprintf("PC1 (%.1f%%) — Review Activity",   var_tbl$PctVar[1]),
+       y = sprintf("PC2 (%.1f%%) — Review Quality",    var_tbl$PctVar[2])) +
+  theme_minimal(base_size = 11)
+```
+
+**Interpretation.** Each point is one listing. The bulk of the market clusters near the
+origin (average engagement, average quality). The top-right quadrant holds
+**highly-rated, frequently-booked** listings — the "stars" of the marketplace. The
+bottom-left quadrant contains **low-engagement, lower-rated** listings. The off-diagonal
+quadrants are interesting: top-left = "well-reviewed but quiet" (possibly new or niche
+listings); bottom-right = "high-traffic but mediocre" (volume without satisfaction). This
+two-axis map makes visible a structure that would be invisible in any single variable.
+
+## 6. t-SNE: nonlinear dimensionality reduction
+
+PCA finds linear axes of maximum variance, which makes it excellent for interpretation
+but limits it to straight-line relationships. t-SNE (t-distributed Stochastic Neighbor
+Embedding) is a nonlinear method that focuses on preserving local neighborhood structure:
+points that are close in the original 16-D space should stay close in the 2-D map.
+This often reveals clusters, sub-populations, or curved manifold structure that PCA
+cannot capture.
+
+We run t-SNE on a random subsample of 5,000 listings (t-SNE scales poorly to very large
+datasets and the neighborhood structure is well-represented by a subsample). The
+perplexity parameter controls the effective neighborhood size; we use perplexity = 30,
+a standard default.
+
+```{r tsne, fig.cap="t-SNE projection of a 5000-listing subsample, coloured by PC1 score (review activity)."}
+set.seed(123)
+
+# Subsample for t-SNE (runs in O(n^2) time)
+n_sub   <- min(5000, nrow(dat_clean))
+sub_idx <- sample(nrow(dat_clean), n_sub)
+tsne_input <- scale(dat_clean[sub_idx, ])
+
+# Remove any duplicate rows (t-SNE fails on exact duplicates)
+dup_rows   <- duplicated(tsne_input)
+tsne_input <- tsne_input[!dup_rows, ]
+sub_idx    <- sub_idx[!dup_rows]
+
+tsne_fit <- Rtsne(tsne_input, dims = 2, perplexity = 30,
+                  max_iter = 1000, check_duplicates = FALSE)
+
+tsne_df <- data.frame(
+  tSNE1 = tsne_fit$Y[, 1],
+  tSNE2 = tsne_fit$Y[, 2],
+  PC1   = pca_fit$x[sub_idx, 1]
+)
+
+ggplot(tsne_df, aes(x = tSNE1, y = tSNE2, colour = PC1)) +
+  geom_point(alpha = 0.5, size = 0.8) +
+  scale_colour_gradient2(low = "#D95F0E", mid = "grey90", high = "#2C7FB8",
+                         midpoint = 0, name = "PC1 score") +
+  labs(title = "t-SNE projection of NYC Airbnb listings",
+       subtitle = "Colour = PC1 score (Review Activity / Engagement)",
+       x = "t-SNE dimension 1",
+       y = "t-SNE dimension 2") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "right")
+```
+
+**Interpretation.** The t-SNE map reveals how listings arrange themselves when we allow
+nonlinear structure. Colouring by PC1 score shows that the linear PCA dimension
+(review engagement) maps smoothly onto the t-SNE layout: high-engagement listings
+(blue) and low-engagement listings (orange) occupy different regions. This is
+reassuring because it means the linear structure that PCA found is *also* present in
+the nonlinear map, not an artifact of forcing a straight line through a curved space.
+
+At the same time, t-SNE may show tighter local clusters or sub-groups that PCA's
+global linear projection smooths over. Any distinct "islands" in the t-SNE plot
+represent groups of listings that are very similar to each other in the full 16-D
+feature space — potential micro-segments within the broader market.
+
+# Component Naming Summary
+
+Based on the loading plots and variable map, the retained components are:
+
+```{r naming-table, echo=FALSE}
+naming <- data.frame(
+  Component = paste0("PC", 1:k_retain),
+  `Variance explained (%)` = sprintf("%.1f", var_tbl$PctVar[1:k_retain]),
+  `Cumulative (%)`         = sprintf("%.1f", var_tbl$CumPctVar[1:k_retain]),
+  `Name / Meaning` = c(
+    "Review Activity / Engagement",
+    "Review Quality (Guest Satisfaction)",
+    "Listing Size / Capacity",
+    "Host Tenure & Portfolio",
+    "Booking Constraints (minimum nights / availability)",
+    "Residual — inspect loadings for PC6 if retained",
+    "Residual — inspect loadings for PC7 if retained",
+    "Residual — inspect loadings for PC8 if retained",
+    "Residual — inspect loadings for PC9 if retained",
+    "Residual — inspect loadings for PC10 if retained"
+  )[1:k_retain],
+  check.names = FALSE
+)
+knitr::kable(naming,
+             caption = "Retained components with interpretive names.")
+```
+
+The names for the top components are grounded directly in the loading plots above;
+names for higher-numbered retained components (if any) should be verified against
+their own loading bar charts before citing in the final report.
+
+# Conclusion
+
+PCA reveals that variation in NYC Airbnb listings is not high-dimensional in the way the
+raw 16-variable table suggests. Most of the structure is captured by a handful of
+interpretable axes:
+
+- **Review engagement** (how actively a listing is booked and reviewed),
+- **Review quality** (how well guests rate it, independent of volume),
+- **Listing size** (physical capacity), and
+- **Host tenure / portfolio** (operator professionalisation).
+
+These components jointly explain $\ge 75\%$ of the variance. They also provide a compact
+feature set for downstream modelling (price regression, clustering of listing "types",
+anomaly detection), which is useful context for the other components of the group
+project.
+
+Parallel analysis corroborates the component retention decision by comparing observed
+eigenvalues against what random noise would produce, giving us a statistically grounded
+answer rather than relying solely on the Kaiser cutoff.
+
+The t-SNE analysis confirms that the linear structure found by PCA is not an artifact.
+The review engagement axis (PC1) maps smoothly onto the nonlinear t-SNE projection,
+meaning the dominant patterns PCA found are robust to the choice of projection method.
+t-SNE also reveals tighter local clusters that PCA's global linear projection smooths
+over, suggesting that micro-segments exist within the broader market structure.
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```
